@@ -345,11 +345,11 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
 
             if (details) {
                 // 📍 FİZİKSEL KONUM KONTROLÜ (Strict District Check)
-                const address = details.address.toLowerCase();
-                const targetDistrict = district.toLowerCase();
+                const address = (details.address || '').toLowerCase();
+                const targetDistrict = (district || '').toLowerCase();
 
                 // Adreste ilçe adı geçiyor mu? (Örn: Adalar/İstanbul)
-                if (address.includes(targetDistrict)) {
+                if (address && address.includes(targetDistrict)) {
                     const normalizedPhone = details.phone.replace(/\D/g, '');
                     if (!seenPhones.has(normalizedPhone)) {
                         seenPhones.add(normalizedPhone);
@@ -443,6 +443,8 @@ async function generateFiles(jobId, businesses, district, searchName) {
         { header: 'Web Sitesi', key: 'website', width: 30 },
         { header: 'Puan', key: 'rating', width: 10 },
         { header: 'Yorum Sayısı', key: 'reviews', width: 15 },
+        { header: 'Potansiyel', key: 'potential', width: 20 },
+        { header: 'Örnek WP Mesajı (Profesyonel)', key: 'pitch', width: 120 },
         { header: 'Google Maps Linki', key: 'mapsUrl', width: 40 },
         { header: 'Adres', key: 'address', width: 50 },
         { header: 'Telefon (Rakam)', key: 'phoneRaw', width: 15 }
@@ -452,6 +454,7 @@ async function generateFiles(jobId, businesses, district, searchName) {
     worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '4472C4' } };
 
     businesses.forEach((b, i) => {
+        const pitchData = generateSalesPitch(b, district);
         worksheet.addRow({
             no: i + 1,
             name: b.name,
@@ -459,6 +462,8 @@ async function generateFiles(jobId, businesses, district, searchName) {
             website: b.website,
             rating: b.rating,
             reviews: b.reviews,
+            potential: pitchData.potential,
+            pitch: pitchData.message,
             mapsUrl: b.mapsUrl,
             address: b.address,
             phoneRaw: b.phone.replace(/\D/g, '')
@@ -678,6 +683,44 @@ app.post('/api/job/:jobId/stop', (req, res) => {
 
     res.status(404).json({ error: 'Çalışan işlem bulunamadı' });
 });
+
+// 🧠 AKILLI SATIŞ ASİSTANI: Profesyonel B2B Analiz ve Mesaj
+function generateSalesPitch(b, district) {
+    const isWebsiteMissing = !b.website;
+    const isLowRated = b.rating && b.rating < 4.2;
+    const isFewReviews = b.reviews && b.reviews < 20;
+
+    // Potansiyel Analizi
+    let potential = "Orta";
+    if (isWebsiteMissing && isFewReviews) potential = "Çok Yüksek 🚀";
+    else if (isWebsiteMissing) potential = "Yüksek 🔥";
+    else if (isLowRated) potential = "Yüksek 🔥";
+
+    // Profesyonel Yaklaşım Mesajı
+    let message = `Merhabalar, ${b.name} yetkilisi ile mi görüşüyorum? `;
+    message += `Google'da ${district} bölgesindeki işletmeleri incelerken size denk geldim. `;
+
+    if (isWebsiteMissing) {
+        message += `İşletmenizin potansiyeli çok yüksek ancak dijitalde tam olarak görünür olmadığınızı fark ettim (Web siteniz eksik). `;
+        message += `Sizin gibi işletmelere özel, müşteri kazandıran dijital çözümler üretiyoruz. `;
+        message += `Müsait olduğunuzda size özel hazırladığım kısa analizi paylaşmak isterim.`;
+    } else if (isLowRated) {
+        message += `Müşterilerinizin işletmeniz hakkında yaptığı yorumları analiz ettim. `;
+        message += `Hizmet kaliteniz yüksek olsa da, dijital itibarınız (puanınız) bunu tam yansıtmıyor olabilir. `;
+        message += `Bu durumu tersine çevirip güvenilirliğinizi artıracak stratejilerimiz var. `;
+        message += `Detayları konuşmak isterseniz dönüş yapabilirsiniz.`;
+    } else if (isFewReviews) {
+        message += `Hizmetinizden memnun kalan çok müşteriniz olduğuna eminim, ancak bu Google profilinize yeterince yansımamış (${b.reviews} yorum). `;
+        message += `Rakiplerinizin önüne geçmek ve daha çok telefon almak için yorum sayınızı organik olarak artırabiliriz. `;
+        message += `Konuyla ilgili size bir sunum iletmemi ister misiniz?`;
+    } else {
+        message += `Profiliniz genel hatlarıyla başarılı görünüyor, tebrik ederim. 👏 `;
+        message += `Ancak sektörünüzde rekabet artıyor ve sizi rakiplerinizden ayıracak özel bir SEO çalışması ile `;
+        message += `arama sonuçlarında dominasyon kurmanızı sağlayabiliriz. Dijital büyüme hedefleriniz varsa görüşmek isterim.`;
+    }
+
+    return { message, potential };
+}
 
 app.listen(PORT, () => {
     console.log(`\n🚀 GMB Scraper API Server v2.0`);
