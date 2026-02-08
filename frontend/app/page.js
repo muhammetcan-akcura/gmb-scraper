@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://gmb-scraper.onrender.com/api';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('sectors');
