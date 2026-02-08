@@ -206,8 +206,8 @@ async function getPlaceDetails(jobId, placeId) {
     try {
         const params = {
             place_id: placeId,
-            // 💰 MALİYET OPTİMİZASYONU: Sadece gerekli alanlar
-            fields: 'name,formatted_phone_number',
+            // 💰 MALİYET + SATIŞ OPTİMİZASYONU: Adres, Telefon, Web sitesi, Puan ve Yorum Sayısı
+            fields: 'name,formatted_phone_number,formatted_address,website,rating,user_ratings_total,url',
             key: GOOGLE_PLACES_API_KEY,
             language: 'tr'
         };
@@ -222,7 +222,12 @@ async function getPlaceDetails(jobId, placeId) {
 
         return {
             name: result.name || 'N/A',
-            phone: result.formatted_phone_number
+            phone: result.formatted_phone_number,
+            address: result.formatted_address || '',
+            website: result.website || '',
+            rating: result.rating || 0,
+            reviews: result.user_ratings_total || 0,
+            mapsUrl: result.url || ''
         };
 
     } catch (error) {
@@ -314,6 +319,11 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
                 addLog(jobId, 'progress', `   ${i + 1}/${placeIdArray.length} (${job.progress}%) - ~${remaining}sn kaldı`);
             }
 
+            if (job.shouldStop) {
+                addLog(jobId, 'warning', `🛑 İşlem durduruldu. Mevcut ${allBusinesses.length} işletme kaydediliyor...`);
+                break;
+            }
+
             let details = null;
 
             // 💾 CACHE KONTROLÜ - Daha önce çektik mi?
@@ -334,10 +344,17 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
             }
 
             if (details) {
-                const normalizedPhone = details.phone.replace(/\D/g, '');
-                if (!seenPhones.has(normalizedPhone)) {
-                    seenPhones.add(normalizedPhone);
-                    allBusinesses.push(details);
+                // 📍 FİZİKSEL KONUM KONTROLÜ (Strict District Check)
+                const address = details.address.toLowerCase();
+                const targetDistrict = district.toLowerCase();
+
+                // Adreste ilçe adı geçiyor mu? (Örn: Adalar/İstanbul)
+                if (address.includes(targetDistrict)) {
+                    const normalizedPhone = details.phone.replace(/\D/g, '');
+                    if (!seenPhones.has(normalizedPhone)) {
+                        seenPhones.add(normalizedPhone);
+                        allBusinesses.push(details);
+                    }
                 }
             }
         }
@@ -423,6 +440,11 @@ async function generateFiles(jobId, businesses, district, searchName) {
         { header: 'No', key: 'no', width: 6 },
         { header: 'İşletme Adı', key: 'name', width: 45 },
         { header: 'Telefon', key: 'phone', width: 20 },
+        { header: 'Web Sitesi', key: 'website', width: 30 },
+        { header: 'Puan', key: 'rating', width: 10 },
+        { header: 'Yorum Sayısı', key: 'reviews', width: 15 },
+        { header: 'Google Maps Linki', key: 'mapsUrl', width: 40 },
+        { header: 'Adres', key: 'address', width: 50 },
         { header: 'Telefon (Rakam)', key: 'phoneRaw', width: 15 }
     ];
 
@@ -434,6 +456,11 @@ async function generateFiles(jobId, businesses, district, searchName) {
             no: i + 1,
             name: b.name,
             phone: b.phone,
+            website: b.website,
+            rating: b.rating,
+            reviews: b.reviews,
+            mapsUrl: b.mapsUrl,
+            address: b.address,
             phoneRaw: b.phone.replace(/\D/g, '')
         });
     });
@@ -508,6 +535,7 @@ app.post('/api/scrape', (req, res) => {
         neighborhoodProgress: null,
         businesses: [],
         files: null,
+        shouldStop: false,
         createdAt: new Date()
     });
 
@@ -550,6 +578,7 @@ app.post('/api/scrape/custom', (req, res) => {
         neighborhoodProgress: null,
         businesses: [],
         files: null,
+        shouldStop: false,
         createdAt: new Date()
     });
 
@@ -635,6 +664,20 @@ app.get('/api/health', (req, res) => {
 // ============================================
 // START SERVER
 // ============================================
+
+// İşlemi durdur
+app.post('/api/job/:jobId/stop', (req, res) => {
+    const { jobId } = req.params;
+    const job = jobs.get(jobId);
+
+    if (job && job.status === 'running') {
+        job.shouldStop = true;
+        addLog(jobId, 'warning', '🛑 Durdurma komutu alındı. Mevcut verilerle sonuçlar hazırlanıyor...');
+        return res.json({ success: true });
+    }
+
+    res.status(404).json({ error: 'Çalışan işlem bulunamadı' });
+});
 
 app.listen(PORT, () => {
     console.log(`\n🚀 GMB Scraper API Server v2.0`);

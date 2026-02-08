@@ -27,6 +27,7 @@ export default function Home() {
   const [neighborhoodProgress, setNeighborhoodProgress] = useState(null);
   const [files, setFiles] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
 
   const logContainerRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -121,6 +122,7 @@ export default function Home() {
     setStats({ total: 0, withPhone: 0, cache: 0 });
     setFiles(null);
     setCurrentNeighborhood(null);
+    setIsStopping(false);
 
     try {
       const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -143,6 +145,32 @@ export default function Home() {
     }
   }
 
+  async function stopJob() {
+    if (!currentJobId || isStopping) return;
+
+    if (!confirm('İşlemi şimdi durdurup şu ana kadar çekilen verileri kaydetmek istiyor musunuz?')) {
+      return;
+    }
+
+    setIsStopping(true);
+    addLog('warning', 'Durdurma isteği gönderiliyor...');
+
+    try {
+      const res = await fetch(`${API_BASE}/job/${currentJobId}/stop`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (data.success) {
+        addLog('warning', 'Durdurma komutu iletildi. Mevcut veriler hazırlanıyor...');
+      } else {
+        throw new Error(data.error || 'Durdurma hatası');
+      }
+    } catch (error) {
+      addLog('error', 'Durdurma hatası: ' + error.message);
+      setIsStopping(false);
+    }
+  }
+
   function startStatusPolling(jobId) {
     if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
     statusIntervalRef.current = setInterval(async () => {
@@ -159,10 +187,12 @@ export default function Home() {
           setFiles(job.files);
           clearInterval(statusIntervalRef.current);
           setIsLoading(false);
+          setIsStopping(false);
         } else if (job.status === 'error') {
           setJobStatus('error');
           clearInterval(statusIntervalRef.current);
           setIsLoading(false);
+          setIsStopping(false);
         }
       } catch (e) { }
     }, 800);
@@ -229,7 +259,8 @@ export default function Home() {
     currentInfo: { padding: '12px 16px', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.3)', borderRadius: '8px', fontSize: '14px', marginBottom: '16px' },
     logContainer: { height: '320px', overflowY: 'auto', background: '#0f172a', borderRadius: '8px', padding: '12px', fontFamily: 'monospace', fontSize: '12px', border: '1px solid #334155' },
     logEntry: { padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' },
-    footer: { marginTop: '32px', textAlign: 'center', fontSize: '13px', color: '#64748b' }
+    footer: { marginTop: '32px', textAlign: 'center', fontSize: '13px', color: '#64748b' },
+    btnStop: { width: '100%', padding: '12px', marginTop: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#ef4444', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }
   };
 
   return (
@@ -300,7 +331,7 @@ export default function Home() {
                 <span style={{ ...styles.statChip, background: 'rgba(16, 185, 129, 0.2)', color: '#34d399' }}>{getEstimatedTime()}</span>
               </div>
 
-              <button style={{ ...styles.btnPrimary, opacity: isLoading ? 0.6 : 1 }} onClick={startSectorScrape} disabled={isLoading}>
+              <button style={{ ...styles.btnPrimary, opacity: (isLoading || isStopping) ? 0.6 : 1 }} onClick={startSectorScrape} disabled={isLoading || isStopping}>
                 {isLoading ? '⏳ Çalışıyor...' : '🚀 Başlat'}
               </button>
             </div>
@@ -336,7 +367,7 @@ export default function Home() {
                 <input style={styles.input} value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="örn: Kuaförler" />
               </div>
 
-              <button style={{ ...styles.btnPrimary, opacity: isLoading ? 0.6 : 1 }} onClick={startCustomScrape} disabled={isLoading}>
+              <button style={{ ...styles.btnPrimary, opacity: (isLoading || isStopping) ? 0.6 : 1 }} onClick={startCustomScrape} disabled={isLoading || isStopping}>
                 {isLoading ? '⏳ Çalışıyor...' : '🚀 Özel Aramayı Başlat'}
               </button>
             </div>
@@ -347,7 +378,7 @@ export default function Home() {
               <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px' }}>📊 Sonuçlar</h3>
               <div style={styles.resultsGrid}>
                 <div style={styles.resultStat}>
-                  <div style={{ ...styles.resultValue, color: '#818cf8' }}>{stats.total}</div>
+                  <div style={{ ...styles.resultValue, color: '#60a5fa' }}>{stats.total}</div>
                   <div style={styles.resultLabel}>Taranan</div>
                 </div>
                 <div style={styles.resultStat}>
@@ -363,6 +394,17 @@ export default function Home() {
                   <div style={styles.resultLabel}>İlerleme</div>
                 </div>
               </div>
+
+              {jobStatus === 'running' && (
+                <button
+                  style={{ ...styles.btnStop, opacity: isStopping ? 0.6 : 1 }}
+                  onClick={stopJob}
+                  disabled={isStopping}
+                >
+                  {isStopping ? '🛑 Durduruluyor...' : '🛑 Durdur ve Kaydet'}
+                </button>
+              )}
+
               {jobStatus === 'completed' && files && (
                 <div style={styles.downloadBtns}>
                   <button style={styles.btnDownload} onClick={() => downloadFile('xlsx')}>📊 Excel İndir</button>
