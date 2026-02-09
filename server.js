@@ -276,13 +276,13 @@ async function getPlaceDetails(jobId, placeId) {
 // MAIN SCRAPING FUNCTION
 // ============================================
 
-async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, city = 'Istanbul', customName = null) {
+async function runScrapeJob(jobId, sectorData, district, useNeighborhoods = true, city = 'Istanbul', customName = null) {
     const job = jobs.get(jobId);
     job.status = 'running';
     job.startTime = new Date();
 
     const neighborhoods = ISTANBUL_MAHALLELER[district] || [];
-    const searchName = customName || keywords.join(', ');
+    const searchName = customName || sectorData.map(s => s.name).join(', ');
 
     addLog(jobId, 'info', `🚀 VERİ ÇEKME BAŞLADI`);
     addLog(jobId, 'info', `${'─'.repeat(50)}`);
@@ -293,45 +293,52 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
     addLog(jobId, 'info', `${'─'.repeat(50)}`);
 
     const allPlaceIds = new Set();
+    const placeToSectorsMap = new Map(); // placeId -> Set of sector names
     const seenPhones = new Set();
     const allBusinesses = [];
 
     try {
         // Search phase
-        for (const keyword of keywords) {
-            addLog(jobId, 'progress', `🔍 Anahtar kelime: "${keyword}"`);
+        for (const sector of sectorData) {
+            addLog(jobId, 'progress', `🏢 Sektör taranıyor: ${sector.name}`);
 
-            if (useNeighborhoods && neighborhoods.length > 0) {
-                for (let i = 0; i < neighborhoods.length; i++) {
-                    const mahalle = neighborhoods[i];
-                    const searchLocation = `${mahalle} ${district} ${city}`;
+            for (const keyword of sector.keywords) {
+                addLog(jobId, 'progress', `   🔍 Anahtar kelime: "${keyword}"`);
 
-                    // 🏘️ Mahalle bilgisini canlı göster
-                    job.currentNeighborhood = mahalle;
-                    job.neighborhoodProgress = { current: i + 1, total: neighborhoods.length };
+                if (useNeighborhoods && neighborhoods.length > 0) {
+                    for (let i = 0; i < neighborhoods.length; i++) {
+                        const mahalle = neighborhoods[i];
+                        const searchLocation = `${mahalle} ${district} ${city}`;
 
-                    addLog(jobId, 'neighborhood', `${mahalle} (${i + 1}/${neighborhoods.length}) - ${allPlaceIds.size} işletme`);
+                        job.currentNeighborhood = mahalle;
+                        job.neighborhoodProgress = { current: i + 1, total: neighborhoods.length };
 
+                        const placeIds = await searchPlaces(jobId, keyword, searchLocation, 60);
+                        placeIds.forEach(id => {
+                            allPlaceIds.add(id);
+                            if (!placeToSectorsMap.has(id)) placeToSectorsMap.set(id, new Set());
+                            placeToSectorsMap.get(id).add(sector.name);
+                        });
+
+                        await sleep(NEIGHBORHOOD_DELAY);
+                    }
+                } else {
+                    const searchLocation = `${district} ${city}`;
                     const placeIds = await searchPlaces(jobId, keyword, searchLocation, 60);
-                    placeIds.forEach(id => allPlaceIds.add(id));
-
-                    await sleep(NEIGHBORHOOD_DELAY);
+                    placeIds.forEach(id => {
+                        allPlaceIds.add(id);
+                        if (!placeToSectorsMap.has(id)) placeToSectorsMap.set(id, new Set());
+                        placeToSectorsMap.get(id).add(sector.name);
+                    });
                 }
-                addLog(jobId, 'success', `✅ "${keyword}" tamamlandı: ${allPlaceIds.size} benzersiz`);
-            } else {
-                const searchLocation = `${district} ${city}`;
-                const placeIds = await searchPlaces(jobId, keyword, searchLocation, 60);
-                placeIds.forEach(id => allPlaceIds.add(id));
-                addLog(jobId, 'success', `✅ "${keyword}": ${placeIds.length} işletme`);
+                await sleep(KEYWORD_DELAY);
             }
-
-            await sleep(KEYWORD_DELAY);
         }
 
         job.currentNeighborhood = null;
         addLog(jobId, 'info', ``);
         addLog(jobId, 'info', `${'═'.repeat(50)}`);
-        addLog(jobId, 'info', `📊 ARAMA TAMAMLANDI: ${allPlaceIds.size} işletme bulundu`);
+        addLog(jobId, 'info', `📊 ARAMA TAMAMLANDI: ${allPlaceIds.size} benzersiz işletme bulundu`);
         addLog(jobId, 'info', `${'═'.repeat(50)}`);
 
         // Detail fetch phase
@@ -362,34 +369,27 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
             }
 
             let details = null;
-
-            // 💾 CACHE KONTROLÜ - Daha önce çektik mi?
             if (placesCache[placeId]) {
                 details = placesCache[placeId];
                 cacheHits++;
             } else {
-                // Cache'de yok, API'den çek
                 details = await getPlaceDetails(jobId, placeId);
                 apiCalls++;
-
-                // Sonucu cache'e kaydet
-                if (details) {
-                    placesCache[placeId] = details;
-                }
-
+                if (details) placesCache[placeId] = details;
                 await sleep(DETAILS_REQUEST_DELAY);
             }
 
             if (details) {
-                // 📍 FİZİKSEL KONUM KONTROLÜ (Strict District Check)
                 const address = (details.address || '').toLowerCase();
                 const targetDistrict = (district || '').toLowerCase();
 
-                // Adreste ilçe adı geçiyor mu? (Örn: Adalar/İstanbul)
                 if (address && address.includes(targetDistrict)) {
                     const normalizedPhone = details.phone.replace(/\D/g, '');
                     if (!seenPhones.has(normalizedPhone)) {
                         seenPhones.add(normalizedPhone);
+
+                        // Sektör listesini işletmeye ekle
+                        details.foundSectors = Array.from(placeToSectorsMap.get(placeId) || []);
                         allBusinesses.push(details);
                     }
                 }
@@ -454,6 +454,7 @@ async function generateFiles(jobId, businesses, district, searchName) {
     businesses.forEach((b, i) => {
         txtLines.push(`${i + 1}. ${b.name}`);
         txtLines.push(`   📞 ${b.phone}`);
+        if (b.foundSectors) txtLines.push(`   📂 Sektörler: ${b.foundSectors.join(', ')}`);
         txtLines.push(``);
     });
 
@@ -466,47 +467,67 @@ async function generateFiles(jobId, businesses, district, searchName) {
     writeFileSync(txtPath, txtLines.join('\n'), 'utf8');
     addLog(jobId, 'success', `📄 TXT: ${txtFilename}`);
 
-    // Excel - Basit format
+    // Excel - Çoklu Sayfa Formatı
     const xlsxFilename = `${safeDistrict}-${safeName}-${date}.xlsx`;
     const xlsxPath = join(outputDir, xlsxFilename);
 
     const workbook = new ExcelJS.Workbook();
     workbook.created = new Date();
 
-    const worksheet = workbook.addWorksheet('İşletmeler');
-    worksheet.columns = [
-        { header: 'No', key: 'no', width: 6 },
-        { header: 'İşletme Adı', key: 'name', width: 45 },
-        { header: 'Telefon', key: 'phone', width: 20 },
-        { header: 'Web Sitesi', key: 'website', width: 30 },
-        { header: 'Puan', key: 'rating', width: 10 },
-        { header: 'Yorum Sayısı', key: 'reviews', width: 15 },
-        { header: 'Potansiyel', key: 'potential', width: 20 },
-        { header: 'Örnek WP Mesajı (Profesyonel)', key: 'pitch', width: 120 },
-        { header: 'Google Maps Linki', key: 'mapsUrl', width: 40 },
-        { header: 'Adres', key: 'address', width: 50 },
-        { header: 'Telefon (Rakam)', key: 'phoneRaw', width: 15 }
-    ];
-
-    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '4472C4' } };
-
-    businesses.forEach((b, i) => {
-        const pitchData = generateSalesPitch(b, district);
-        worksheet.addRow({
-            no: i + 1,
-            name: b.name,
-            phone: b.phone,
-            website: b.website,
-            rating: b.rating,
-            reviews: b.reviews,
-            potential: pitchData.potential,
-            pitch: pitchData.message,
-            mapsUrl: b.mapsUrl,
-            address: b.address,
-            phoneRaw: b.phone.replace(/\D/g, '')
+    // Sektörleri grupla
+    const sectorGroups = new Map();
+    businesses.forEach(b => {
+        const sectors = b.foundSectors && b.foundSectors.length > 0 ? b.foundSectors : ['Genel'];
+        sectors.forEach(sName => {
+            if (!sectorGroups.has(sName)) sectorGroups.set(sName, []);
+            sectorGroups.get(sName).push(b);
         });
     });
+
+    // Her sektör için bir sayfa oluştur
+    for (const [sName, sBusinesses] of sectorGroups.entries()) {
+        const sheetName = sName.replace(/[\[\]\*\?\:\/\\\s]+/g, ' ').trim().slice(0, 31) || 'Liste';
+        const worksheet = workbook.addWorksheet(sheetName);
+
+        worksheet.columns = [
+            { header: 'No', key: 'no', width: 6 },
+            { header: 'İşletme Adı', key: 'name', width: 45 },
+            { header: 'Telefon', key: 'phone', width: 20 },
+            { header: 'Web Sitesi', key: 'website', width: 30 },
+            { header: 'Puan', key: 'rating', width: 10 },
+            { header: 'Yorum Sayısı', key: 'reviews', width: 15 },
+            { header: 'Potansiyel', key: 'potential', width: 20 },
+            { header: 'Örnek WP Mesajı (Profesyonel)', key: 'pitch', width: 120 },
+            { header: 'Google Maps Linki', key: 'mapsUrl', width: 40 },
+            { header: 'Adres', key: 'address', width: 50 },
+            { header: 'Telefon (Rakam)', key: 'phoneRaw', width: 15 }
+        ];
+
+        worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+        worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '4472C4' } };
+
+        sBusinesses.forEach((b, i) => {
+            const pitchData = generateSalesPitch(b, district);
+            worksheet.addRow({
+                no: i + 1,
+                name: b.name,
+                phone: b.phone,
+                website: b.website,
+                rating: b.rating,
+                reviews: b.reviews,
+                potential: pitchData.potential,
+                pitch: pitchData.message,
+                mapsUrl: b.mapsUrl,
+                address: b.address,
+                phoneRaw: b.phone.replace(/\D/g, '')
+            });
+        });
+    }
+
+    // Eğer hiç sayfa oluşmadıysa (işletme yoksa) boş bir sayfa ekle
+    if (workbook.worksheets.length === 0) {
+        workbook.addWorksheet('Boş').addRow(['Sonuç Bulunamadı']);
+    }
 
     await workbook.xlsx.writeFile(xlsxPath);
     addLog(jobId, 'success', `📊 Excel: ${xlsxFilename}`);
@@ -545,14 +566,11 @@ app.post('/api/scrape', (req, res) => {
         return res.status(400).json({ error: 'İlçe seçilmeli' });
     }
 
-    // Collect all keywords from selected sectors
-    const keywords = [];
-    const sectorNames = [];
+    const sectorData = [];
     for (const sectorId of sectors) {
         const sector = SEKTORLER.find(s => s.id === sectorId);
         if (sector) {
-            keywords.push(...sector.keywords);
-            sectorNames.push(sector.name);
+            sectorData.push({ name: sector.name, keywords: sector.keywords });
         }
     }
 
@@ -564,8 +582,6 @@ app.post('/api/scrape', (req, res) => {
         status: 'pending',
         type: 'sector',
         sectors,
-        sectorNames,
-        keywords,
         district,
         city,
         useNeighborhoods,
@@ -582,9 +598,9 @@ app.post('/api/scrape', (req, res) => {
         createdAt: new Date()
     });
 
-    runScrapeJob(jobId, keywords, district, useNeighborhoods, city, sectorNames.join(', '));
+    runScrapeJob(jobId, sectorData, district, useNeighborhoods, city);
 
-    res.json({ jobId, message: 'İşlem başlatıldı', neighborhoodCount: neighborhoods.length, keywordCount: keywords.length });
+    res.json({ jobId, message: 'İşlem başlatıldı', neighborhoodCount: neighborhoods.length, sectorCount: sectorData.length });
 });
 
 // 🆕 Custom arama (özel sektör/keyword)
@@ -599,6 +615,7 @@ app.post('/api/scrape/custom', (req, res) => {
     }
 
     const keywordList = Array.isArray(keywords) ? keywords : keywords.split(',').map(k => k.trim()).filter(k => k);
+    const sectorData = [{ name: customName || 'Özel Arama', keywords: keywordList }];
 
     const jobId = generateJobId();
     const neighborhoods = ISTANBUL_MAHALLELER[district] || [];
@@ -625,7 +642,7 @@ app.post('/api/scrape/custom', (req, res) => {
         createdAt: new Date()
     });
 
-    runScrapeJob(jobId, keywordList, district, useNeighborhoods, city, customName);
+    runScrapeJob(jobId, sectorData, district, useNeighborhoods, city, customName);
 
     res.json({ jobId, message: 'Custom arama başlatıldı', neighborhoodCount: neighborhoods.length, keywordCount: keywordList.length });
 });
