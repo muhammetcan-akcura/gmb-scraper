@@ -177,25 +177,46 @@ export default function Home() {
       try {
         const res = await fetch(`${API_BASE}/job/${jobId}`);
         const job = await res.json();
+
+        if (job.error) {
+          addLog('error', 'Hata: ' + job.error);
+          setJobStatus('error');
+          clearInterval(statusIntervalRef.current);
+          setIsLoading(false);
+          setIsStopping(false);
+          return;
+        }
+
         setProgress(job.progress || 0);
         setStats({ total: job.totalPlaces || 0, withPhone: job.totalBusinesses || 0, cache: job.cacheHits || 0 });
         setCurrentNeighborhood(job.currentNeighborhood);
         setNeighborhoodProgress(job.neighborhoodProgress);
 
         if (job.status === 'completed') {
-          setJobStatus('completed');
-          setFiles(job.files);
-          clearInterval(statusIntervalRef.current);
-          setIsLoading(false);
-          setIsStopping(false);
+          // Status completed olsa bile files gelmemişse beklemeye devam et (Backend hazırlıyor olabilir)
+          if (job.files) {
+            setJobStatus('completed');
+            setFiles(job.files);
+            clearInterval(statusIntervalRef.current);
+            setIsLoading(false);
+            setIsStopping(false);
+          } else {
+            // Log only once for file prep if we want, or just let it poll
+            if (job.progress === 100 && jobStatus !== 'completed') {
+              // Hala hazırlıyor
+            }
+          }
         } else if (job.status === 'error') {
           setJobStatus('error');
+          addLog('error', job.error || 'Bilinmeyen bir hata oluştu');
           clearInterval(statusIntervalRef.current);
           setIsLoading(false);
           setIsStopping(false);
         }
-      } catch (e) { }
-    }, 800);
+      } catch (e) {
+        console.error('Polling error:', e);
+      }
+    }, 1000);
   }
 
   function startLogStreaming(jobId) {
@@ -267,8 +288,7 @@ export default function Home() {
     <div style={styles.container}>
       <header style={styles.header}>
         <h1 style={styles.title}>🗺️ GMB Veri Çekici</h1>
-        <p style={styles.subtitle}>Google Maps'ten işletme bilgilerini çekin (Sadece isim + telefon)</p>
-      </header>
+        </header>
 
       <div style={styles.grid}>
         {/* Sol Panel */}
@@ -465,10 +485,6 @@ export default function Home() {
           </div>
         </div>
       </div>
-
-      <footer style={styles.footer}>
-        <p>💰 API Optimized: Sadece isim + telefon | 💾 Cache: Tekrar API çağrısı yok</p>
-      </footer>
     </div>
   );
 }

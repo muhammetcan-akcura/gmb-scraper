@@ -28,13 +28,45 @@ const NEIGHBORHOOD_DELAY = 300;
 const KEYWORD_DELAY = 800;
 
 // Job storage
-const jobs = new Map();
+const JOBS_FILE = join(__dirname, 'data', 'jobs-persistence.json');
+let jobs = new Map();
 const jobLogs = new Map();
+
+// Ensure required directories exist
+const dataDir = join(__dirname, 'data');
+const outputDir = join(__dirname, 'output');
+if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+
+function loadJobs() {
+    try {
+        if (existsSync(JOBS_FILE)) {
+            const data = JSON.parse(readFileSync(JOBS_FILE, 'utf8'));
+            jobs = new Map(Object.entries(data));
+            console.log(`📋 ${jobs.size} eski iş kaydı yüklendi`);
+        }
+    } catch (error) {
+        console.warn('⚠️ İş kayıtları yüklenemedi');
+        jobs = new Map();
+    }
+}
+
+function saveJobs() {
+    try {
+        const obj = Object.fromEntries(jobs);
+        writeFileSync(JOBS_FILE, JSON.stringify(obj, null, 2), 'utf8');
+    } catch (error) {
+        console.error('İş kayıtları kaydedilemedi:', error.message);
+    }
+}
+
+loadJobs();
 
 // Allowed origins for CORS
 const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:3001',
+    'https://gmb-scraper.netlify.app',
     process.env.FRONTEND_URL, // Netlify URL
 ].filter(Boolean);
 
@@ -141,6 +173,11 @@ function addLog(jobId, type, message, data = null) {
     }
     const logEntry = { timestamp: new Date().toISOString(), type, message, data };
     jobLogs.get(jobId).push(logEntry);
+
+    // İş tamamlandığında veya önemli bir adımda kayıt yap
+    if (type === 'success' && (message.includes('TAMAMLANDI') || message.includes('dosyalar hazır'))) {
+        saveJobs();
+    }
 
     const prefix = { info: 'ℹ️', success: '✅', error: '❌', warning: '⚠️', progress: '📊', neighborhood: '🏘️', cache: '💾' }[type] || '•';
     console.log(`[${jobId.slice(-8)}] ${prefix} ${message}`);
@@ -364,7 +401,6 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
 
         // Results
         job.businesses = allBusinesses;
-        job.status = 'completed';
         job.endTime = new Date();
         job.totalBusinesses = allBusinesses.length;
         job.progress = 100;
@@ -372,8 +408,10 @@ async function runScrapeJob(jobId, keywords, district, useNeighborhoods = true, 
         job.cacheHits = cacheHits;
 
         // Generate files
+        addLog(jobId, 'progress', `📂 Dosyalar hazırlanıyor (${allBusinesses.length} işletme)...`);
         await generateFiles(jobId, allBusinesses, district, searchName);
 
+        job.status = 'completed';
         const duration = Math.round((job.endTime - job.startTime) / 1000);
         addLog(jobId, 'info', ``);
         addLog(jobId, 'success', `🎉 İŞLEM TAMAMLANDI!`);
@@ -653,13 +691,40 @@ app.get('/api/job/:jobId/download/:format', (req, res) => {
     const { jobId, format } = req.params;
     const job = jobs.get(jobId);
 
-    if (!job) return res.status(404).json({ error: 'İş bulunamadı' });
-    if (!job.files) return res.status(400).json({ error: 'Dosyalar henüz hazır değil' });
+    if (!job) {
+        console.error(`Download error: Job ${jobId} not found`);
+        return res.status(404).json({ error: 'İş kaydı bulunamadı. Sunucu yeniden başlamış olabilir.' });
+    }
+
+    if (!job.files) {
+        return res.status(400).json({ error: 'Dosyalar henüz hazır değil' });
+    }
 
     const file = format === 'xlsx' ? job.files.xlsx : job.files.txt;
-    if (!file) return res.status(400).json({ error: 'Dosya bulunamadı' });
 
-    res.download(file.path, file.filename);
+    if (!file || !file.path) {
+        return res.status(404).json({ error: 'Dosya bilgisi bulunamadı' });
+    }
+
+    // Dosyanın fiziksel olarak diskte olup olmadığını kontrol et
+    if (!existsSync(file.path)) {
+        console.error(`Download error: File not found at ${file.path}`);
+        return res.status(404).json({
+            error: 'Dosya sunucudan silinmiş. Render geçici disk alanı dosyaları temizlemiş olabilir.',
+            tip: 'Lütfen taramayı sistemden tekrar başlatın.'
+        });
+    }
+
+    // Content-Type ve Content-Disposition ayarlarını Manuel yapalım (Bazen res.download hata verebiliyor)
+    res.setHeader('Content-Disposition', `attachment; filename=${file.filename}`);
+    res.download(file.path, file.filename, (err) => {
+        if (err) {
+            console.error(`Download error for ${jobId}:`, err);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'İndirme sırasında bir hata oluştu' });
+            }
+        }
+    });
 });
 
 app.get('/api/health', (req, res) => {
