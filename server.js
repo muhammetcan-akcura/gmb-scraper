@@ -486,7 +486,13 @@ async function generateFiles(jobId, businesses, district, searchName) {
 
     // Her sektör için bir sayfa oluştur
     for (const [sName, sBusinesses] of sectorGroups.entries()) {
-        const sheetName = sName.replace(/[\[\]\*\?\:\/\\\s]+/g, ' ').trim().slice(0, 31) || 'Liste';
+        // Excel sayfa ismi kısıtlamaları: Simge (emoji) temizle ve max 31 karakter
+        const sheetName = sName
+            .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E6}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '') // Emojileri sil
+            .replace(/[\[\]\*\?\:\/\\\s]+/g, ' ') // Yasaklı karakterleri sil
+            .trim()
+            .slice(0, 31) || 'Liste';
+
         const worksheet = workbook.addWorksheet(sheetName);
 
         worksheet.columns = [

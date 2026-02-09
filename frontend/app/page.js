@@ -352,7 +352,7 @@ export default function Home() {
               </div>
 
               <button style={{ ...styles.btnPrimary, opacity: (isLoading || isStopping) ? 0.6 : 1 }} onClick={startSectorScrape} disabled={isLoading || isStopping}>
-                {isLoading ? '⏳ Çalışıyor...' : '🚀 Başlat'}
+                {isLoading ? '⏳ Çalışıyor...' : 'Başlat'}
               </button>
             </div>
           )}
@@ -388,7 +388,7 @@ export default function Home() {
               </div>
 
               <button style={{ ...styles.btnPrimary, opacity: (isLoading || isStopping) ? 0.6 : 1 }} onClick={startCustomScrape} disabled={isLoading || isStopping}>
-                {isLoading ? '⏳ Çalışıyor...' : '🚀 Özel Aramayı Başlat'}
+                {isLoading ? '⏳ Çalışıyor...' : ' Özel Aramayı Başlat'}
               </button>
             </div>
           )}
